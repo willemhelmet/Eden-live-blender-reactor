@@ -29,7 +29,7 @@ def backend_factory(context):
         return (lambda cb: MockBackend(cb)), MockBackend.label
     ok, detail = deps.sdk_status()
     if not ok:
-        raise UserError("Reactor SDK not available. Use a platform-specific build or Preferences > Add-ons > EdenLive > Install.")
+        raise UserError("Reactor SDK not available. Install the extension zip from the Releases page, or click Install Reactor SDK in the add-on preferences.")
     if not bpy.app.online_access:
         raise UserError("Online access is disabled: Preferences > System > Network > Allow Online Access.")
     key = get_api_key(context)

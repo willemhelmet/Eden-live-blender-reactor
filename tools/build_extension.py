@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Build installable zips.
+"""Build the installable extension zip.
 
     python tools/build_extension.py --blender /path/to/blender
 
 1. Downloads the reactor-sdk wheels listed in blender_manifest.toml from PyPI
    (sha256-verified) into eden_live_previs/wheels/.
-2. Runs ``blender --command extension build --split-platforms`` -> one extension
-   zip per platform in dist/, each bundling only its own wheel.
-3. Writes dist/eden_live_previs-<version>-legacy-addon.zip: the add-on without
-   wheels, for "Install from Disk" as a legacy add-on (SDK installed from prefs).
+2. Runs ``blender --command extension build`` -> dist/eden_live_previs-<version>.zip,
+   one zip for every platform. It carries all four wheels (about 10 MB each);
+   Blender installs only the wheel that matches the machine it is installed on.
 
-Use --skip-blender to only fetch wheels and build the legacy zip.
+Options:
+  --legacy        also write dist/eden_live_previs-<version>-legacy-addon.zip, the
+                  add-on without wheels for "Install from Disk" as a legacy add-on
+                  (the SDK is then installed from the add-on preferences).
+  --skip-blender  only fetch wheels (and build the legacy zip with --legacy).
 """
 
 import argparse
@@ -66,16 +69,21 @@ def fetch_wheels():
             f.write(data)
 
 
-def build_extensions(blender):
+def build_extension(blender):
     os.makedirs(DIST, exist_ok=True)
-    cmd = [blender, "--factory-startup", "--command", "extension", "build", "--split-platforms",
-           "--source-dir", ADDON, "--output-dir", DIST]
+    path = os.path.join(DIST, f"eden_live_previs-{manifest_version()}.zip")
+    cmd = [blender, "--factory-startup", "--command", "extension", "build",
+           "--source-dir", ADDON, "--output-filepath", path]
     print(" ".join(cmd))
     subprocess.run(cmd, check=True)
-    for name in sorted(os.listdir(DIST)):
-        if name.endswith(".zip") and "legacy" not in name:
-            subprocess.run([blender, "--factory-startup", "--command", "extension", "validate",
-                            os.path.join(DIST, name)], check=True)
+    subprocess.run([blender, "--factory-startup", "--command", "extension", "validate", path], check=True)
+    with zipfile.ZipFile(path) as zf:
+        wheels = [n for n in zf.namelist() if n.endswith(".whl")]
+    missing = set(manifest_wheels()) - {os.path.basename(w) for w in wheels}
+    if missing:
+        sys.exit(f"{path} is missing wheels: {sorted(missing)}")
+    print(f"wrote   {path} ({os.path.getsize(path) / 1e6:.1f} MB, {len(wheels)} wheels)")
+    return path
 
 
 def build_legacy():
@@ -96,11 +104,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--blender", default=shutil.which("blender") or "blender")
     parser.add_argument("--skip-blender", action="store_true")
+    parser.add_argument("--legacy", action="store_true", help="also build the legacy add-on zip (no wheels)")
     args = parser.parse_args()
     fetch_wheels()
     if not args.skip_blender:
-        build_extensions(args.blender)
-    build_legacy()
+        build_extension(args.blender)
+    if args.legacy:
+        build_legacy()
 
 
 if __name__ == "__main__":

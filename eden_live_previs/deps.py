@@ -1,9 +1,9 @@
 """Locate, or as a fallback install, the Reactor Python SDK.
 
-The platform-specific extension zips bundle the ``reactor-sdk`` wheel, which
-Blender installs itself; nothing here runs in that case. When the add-on is
-installed without wheels (legacy add-on zip, or from a git checkout), the
-preferences offer an "Install Reactor SDK" button that runs Blender's own
+The extension zip bundles the ``reactor-sdk`` wheels and Blender installs the
+one for the current platform itself; nothing here runs in that case. When the
+add-on is installed without wheels (legacy add-on zip, or from a git checkout),
+the preferences offer an "Install Reactor SDK" button that runs Blender's own
 Python ``-m pip install --target <user dir>``.
 """
 

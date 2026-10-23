@@ -1,0 +1,63 @@
+name: Release
+
+# Push a tag like v0.1.0 (matching the version in blender_manifest.toml) to build
+# the extension zip and publish it on the GitHub Releases page.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    env:
+      BLENDER_VERSION: "4.2.3"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that the tag matches blender_manifest.toml
+        run: |
+          manifest=$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' eden_live_previs/blender_manifest.toml)
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$manifest" != "$tag" ]; then
+            echo "Tag v$tag does not match manifest version $manifest" >&2
+            exit 1
+          fi
+
+      - name: Cache Blender
+        id: cache-blender
+        uses: actions/cache@v4
+        with:
+          path: blender
+          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
+
+      - name: Download Blender
+        timeout-minutes: 10
+        if: steps.cache-blender.outputs.cache-hit != 'true'
+        run: |
+          series="${BLENDER_VERSION%.*}"
+          curl -fsSL "https://download.blender.org/release/Blender${series}/blender-${BLENDER_VERSION}-linux-x64.tar.xz" | tar xJ
+          mv "blender-${BLENDER_VERSION}-linux-x64" blender
+
+      - name: Build and validate the extension zip
+        run: python3 tools/build_extension.py --blender blender/blender
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          zip=$(ls dist/eden_live_previs-*.zip)
+          cat > notes.md <<NOTES
+          **Install:** download \`$(basename "$zip")\` below and drag it onto Blender's window
+          (Blender 4.2 or newer, any OS). Then enable **Preferences > System > Network > Allow Online Access**
+          and paste your Reactor API key into the EdenLive sidebar.
+
+          One zip works on Windows, macOS (Apple Silicon and Intel) and Linux.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" "$zip" \
+            --title "EdenLive Pre-vis $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --generate-notes
