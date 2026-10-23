@@ -11,6 +11,9 @@ from .props import get_settings, prompt_value
 from .recorder import Recorder
 from .session import UserError, get_session
 
+DASHBOARD_URL = "https://reactor.inc/dashboard"
+HELP_URL = "https://github.com/willemhelmet/Eden-live-blender-reactor#readme"
+
 
 def resolve_path(path):
     """bpy.path.abspath, but relative paths in an unsaved file go to the temp dir."""
@@ -111,14 +114,15 @@ class EDENLIVE_OT_disconnect(bpy.types.Operator):
     def execute(self, context):
         if live.state.recorder is not None:
             live.state.recorder.cancel()
+        live.state.go_live = None
         get_session().disconnect()
         return {"FINISHED"}
 
 
 class EDENLIVE_OT_start(bpy.types.Operator):
     bl_idname = "eden_live.start"
-    bl_label = "Start"
-    bl_description = "Stage the reference and prompt, then create a new world (replaces the current one)"
+    bl_label = "Restart World"
+    bl_description = "Create a new world from the current reference and prompt (replaces the running one)"
 
     @classmethod
     def poll(cls, context):
@@ -139,6 +143,144 @@ class EDENLIVE_OT_start(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         session.start_world(path, prompt, settings.seed, pixels)
+        return {"FINISHED"}
+
+
+def preview_is_visible():
+    image = bpy.data.images.get(live.PREVIEW_IMAGE)
+    if image is None:
+        return False
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == "IMAGE_EDITOR" and area.spaces.active.image == image:
+                return True
+    return False
+
+
+class GoLiveSequence:
+    """Capture a reference if needed, wait for the session, start the world, show the preview.
+
+    Driven by a bpy timer in the UI (see ``EDENLIVE_OT_go_live``); headless tests call
+    ``step()`` themselves. ``message`` is what the panel shows meanwhile.
+    """
+
+    CONNECT_TIMEOUT = 180.0
+
+    def __init__(self, scene_name, reference_path, waiter, connected_here):
+        self.scene_name = scene_name
+        self.path = reference_path
+        self.waiter = waiter
+        self.connected_here = connected_here
+        self.started = time.perf_counter()
+        self.message = "Capturing reference..." if waiter is not None else "Connecting..."
+        self.done = False
+        self.error = ""
+
+    def step(self):
+        """Advance; returns the seconds until the next step, or None when finished."""
+        try:
+            return self._step()
+        except (UserError, capture.CaptureError) as exc:
+            return self._fail(str(exc))
+        except Exception as exc:
+            return self._fail(f"Go Live failed: {exc}")
+
+    def _step(self):
+        session = get_session()
+        scene = bpy.data.scenes.get(self.scene_name)
+        if scene is None:
+            raise UserError("The scene went away.")
+        settings = scene.eden_live
+        if self.waiter is not None:
+            frame = self.waiter.poll()
+            if frame is None:
+                return 0.05
+            self.path = save_reference(settings, frame)
+            self.waiter = None
+            session._log("Captured the camera view as the reference. Restyle it for a richer look.")
+        if session.status == "connecting":
+            detail = f" ({session.remote_status})" if session.remote_status else ""
+            self.message = f"Connecting{detail}..."
+            if time.perf_counter() - self.started > self.CONNECT_TIMEOUT:
+                raise UserError("Timed out waiting for Reactor to assign a GPU. Try again.")
+            return 0.2
+        if not session.ready:
+            raise UserError(session.last_error or "Could not connect to Reactor.")
+        prompt = prompt_value(settings)
+        if not prompt:
+            raise UserError("Write a prompt first.")
+        pixels = reference_pixels_for(self.path, mock=session.backend_label == MockBackend.label)
+        self.message = "Starting the world..."
+        session.start_world(self.path, prompt, settings.seed, pixels)
+        if not bpy.app.background and not preview_is_visible():
+            try:
+                bpy.ops.eden_live.open_preview(target="SPLIT")
+            except Exception:
+                session._log("Could not open the preview; use the panel menu.")
+        return self._finish()
+
+    def _fail(self, message):
+        session = get_session()
+        self.error = message
+        session.last_error = message
+        session._log(message)
+        if self.connected_here:
+            session.disconnect()
+        return self._finish()
+
+    def _finish(self):
+        self.done = True
+        if live.state.go_live is self:
+            live.state.go_live = None
+        live.redraw_panels()
+        return None
+
+
+class EDENLIVE_OT_go_live(bpy.types.Operator):
+    bl_idname = "eden_live.go_live"
+    bl_label = "Go Live"
+    bl_description = (
+        "Connect to Reactor, send the reference and prompt, create the world and show the preview. "
+        "Captures the camera view as the reference if none is set"
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return live.state.go_live is None and live.state.recorder is None
+
+    def execute(self, context):
+        settings = get_settings(context)
+        session = get_session()
+        path = resolve_path(settings.reference_path) if settings.reference_path else ""
+        connected_here = False
+        try:
+            if not prompt_value(settings):
+                raise UserError("Write a prompt first.")
+            if path and not os.path.isfile(path):
+                raise UserError(f"Reference image not found: {path}")
+            if not session.ready and session.status != "connecting":
+                factory, label = backend_factory(context)
+                session.fps = float(settings.fps)
+                session.side_by_side = settings.show_draft
+                session.connect(factory, label)
+                connected_here = True
+            waiter = None
+            if not path:
+                if bpy.app.background:
+                    path = save_reference(settings, capture.render_capture(context.scene))
+                else:
+                    waiter = ViewportFrameWaiter(settings)
+        except (UserError, capture.CaptureError) as exc:
+            if connected_here:
+                session.disconnect()
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        live.ensure_preview_image()
+        session.last_error = ""
+        seq = GoLiveSequence(context.scene.name, path, waiter, connected_here)
+        live.state.go_live = seq
+        if not bpy.app.background:
+            bpy.app.timers.register(lambda: seq.step() if live.state.go_live is seq else None, first_interval=0.05)
         return {"FINISHED"}
 
 
@@ -225,7 +367,7 @@ class EDENLIVE_OT_capture_reference(bpy.types.Operator):
 class EDENLIVE_OT_reference_from_output(bpy.types.Operator):
     bl_idname = "eden_live.reference_from_output"
     bl_label = "Use Output"
-    bl_description = "Save the latest generated frame and use it as the reference (call Start to apply)"
+    bl_description = "Save the latest generated frame and use it as the reference (Restart World applies it)"
 
     @classmethod
     def poll(cls, context):
@@ -422,6 +564,20 @@ class EDENLIVE_OT_install_sdk(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class EDENLIVE_OT_open_preferences(bpy.types.Operator):
+    bl_idname = "eden_live.open_preferences"
+    bl_label = "Preferences"
+    bl_description = "Open the add-on preferences, where the Reactor API key lives"
+
+    def execute(self, context):
+        try:
+            bpy.ops.preferences.addon_show(module=__package__)
+        except Exception as exc:
+            self.report({"ERROR"}, f"Could not open the preferences: {exc}")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 class EDENLIVE_OT_build_demo(bpy.types.Operator):
     bl_idname = "eden_live.build_demo"
     bl_label = "Build Demo Scene"
@@ -436,6 +592,7 @@ classes = (
     EDENLIVE_OT_connect,
     EDENLIVE_OT_disconnect,
     EDENLIVE_OT_start,
+    EDENLIVE_OT_go_live,
     EDENLIVE_OT_pause,
     EDENLIVE_OT_send_prompt,
     EDENLIVE_OT_capture_reference,
@@ -443,5 +600,6 @@ classes = (
     EDENLIVE_OT_open_preview,
     EDENLIVE_OT_record,
     EDENLIVE_OT_install_sdk,
+    EDENLIVE_OT_open_preferences,
     EDENLIVE_OT_build_demo,
 )

@@ -29,6 +29,7 @@ state = SimpleNamespace(
     capturer=None,
     recorder=None,
     last_recorder=None,
+    go_live=None,
     last_redraw=0.0,
 )
 

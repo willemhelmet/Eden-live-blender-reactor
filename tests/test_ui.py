@@ -3,10 +3,12 @@
     blender --python tests/test_ui.py                 # add-on from this checkout, mock backend (EDEN_LIVE_MOCK)
     EDEN_BACKEND=REACTOR REACTOR_API_KEY=rk_... blender --python tests/test_ui.py
 
-Builds the demo scene, opens the EdenLive sidebar, connects, captures a reference,
-starts a world, opens the preview window, records the timeline (first 48 frames)
-through the modal operator, then quits. Prints PASS/FAIL lines and exits non-zero
-on failure. Set EDEN_KEEP_OPEN=1 to leave Blender running afterwards.
+Builds the demo scene, opens the EdenLive sidebar, presses Go Live (which captures a
+reference, connects, starts a world and opens the split preview on its own), checks
+the preview, edits the prompt live, pauses and resumes, records the timeline (first
+48 frames) through the modal operator, then quits. Prints PASS/FAIL lines and exits
+non-zero on failure. Set EDEN_KEEP_OPEN=1 to leave Blender running afterwards, EDEN_SHOT=/path.png
+to save a screenshot of the window while live.
 """
 
 import os
@@ -30,6 +32,7 @@ def enable_addon():
     return "eden_live_previs"
 
 
+bpy.context.preferences.view.show_splash = False  # keep the splash out of screenshots
 MODULE = enable_addon()
 pkg = sys.modules[MODULE]
 session_mod = sys.modules[MODULE + ".session"]
@@ -86,37 +89,32 @@ def steps():
                 pass
     yield 0.5
 
-    with bpy.context.temp_override(**ctx):
-        assert bpy.ops.eden_live.capture_reference() == {"FINISHED"}
-    yield from wait(lambda: scene.eden_live.reference_path, 10, "reference capture")
-    ref = bpy.path.abspath(scene.eden_live.reference_path)
-    assert os.path.isfile(ref), ref
-    log(f"PASS reference captured: {ref}")
-
     if os.environ.get("EDEN_SHOT_PAUSE"):
         yield float(os.environ["EDEN_SHOT_PAUSE"])
+    scene.eden_live.reference_path = ""
     with bpy.context.temp_override(**ctx):
-        bpy.ops.eden_live.connect()
+        assert bpy.ops.eden_live.go_live() == {"FINISHED"}
+    assert live.state.go_live is not None
+    yield from wait(lambda: scene.eden_live.reference_path, 10, "reference auto-capture")
+    ref = bpy.path.abspath(scene.eden_live.reference_path)
+    assert os.path.isfile(ref), ref
+    log(f"PASS Go Live captured a reference: {ref}")
     yield from wait(lambda: session.status in ("ready", "error"), 180, "connect")
     assert session.ready, session.last_error
-    log(f"PASS connected ({session.backend_label})")
-
-    with bpy.context.temp_override(**ctx):
-        bpy.ops.eden_live.start()
+    log(f"PASS Go Live connected ({session.backend_label})")
+    yield from wait(lambda: live.state.go_live is None, 30, "go-live sequence")
+    assert not session.last_error, session.last_error
     yield from wait(lambda: session.state.get("started") and session.main.seq > 5, 120, "first frames")
     yield 3.0
     rate = session.in_meter.rate()
     assert rate >= 0.75 * scene.eden_live.fps, f"sending only {rate:.1f} fps"
-    log(f"PASS world started; sending {rate:.1f} fps (target {scene.eden_live.fps}), draft capture "
+    log(f"PASS Go Live started the world; sending {rate:.1f} fps (target {scene.eden_live.fps}), draft capture "
         f"{live.state.capture_meter.rate():.1f} fps at {live.state.capture_cost * 1000:.0f} ms each")
 
-    with bpy.context.temp_override(**ctx):
-        bpy.ops.eden_live.open_preview(target="SPLIT")
-    yield 1.0
     ctx = window_ctx()
     editors = [a for a in ctx["window"].screen.areas if a.type == "IMAGE_EDITOR"]
     assert editors and editors[0].spaces.active.image.name == live.PREVIEW_IMAGE
-    log("PASS preview split next to the 3D Viewport")
+    log("PASS Go Live opened the preview split next to the 3D Viewport")
     scene.eden_live.show_draft = True
     yield 2.0
     image = bpy.data.images.get(live.PREVIEW_IMAGE)
@@ -134,6 +132,16 @@ def steps():
     log(f"PASS preview image updating ({tuple(image.size)}), receiving {session.out_meter.rate():.0f} fps")
     if os.environ.get("EDEN_SHOT_PAUSE"):
         yield float(os.environ["EDEN_SHOT_PAUSE"])
+    if os.environ.get("EDEN_SHOT"):
+        # EDEN_SHOT=/path/to.png saves a screenshot of the Blender window while live.
+        ctx = window_ctx()
+        for region in ctx["area"].regions:
+            if region.type == "UI":
+                region.active_panel_category = "EdenLive"
+        yield 0.5
+        with bpy.context.temp_override(**ctx):
+            bpy.ops.screen.screenshot(filepath=os.environ["EDEN_SHOT"])
+        log(f"screenshot saved to {os.environ['EDEN_SHOT']}")
 
     scene.eden_live.prompt = "The same temple courtyard at night, lit by torches and blue moonlight."
     yield from wait(lambda: "night" in session.state.get("prompt", ""), 10, "live prompt")

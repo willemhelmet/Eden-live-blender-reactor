@@ -44,10 +44,11 @@ class EdenLiveSettings(bpy.types.PropertyGroup):
     )
     seed: IntProperty(name="Seed", default=2026092901, min=0, max=2147483647)
     source_mode: EnumProperty(
-        name="Draft view",
+        name="Stream",
+        description="Which view EdenLive sees",
         items=[
-            ("CAMERA", "Active camera", "Stream the scene camera's view at 1280x704"),
-            ("VIEWPORT", "Viewport", "Stream the 3D Viewport's current view"),
+            ("CAMERA", "Camera", "Stream the scene camera's view at 1280x704", "CAMERA_DATA", 0),
+            ("VIEWPORT", "Viewport", "Stream whatever the 3D Viewport shows, so you can fly around", "VIEW3D", 1),
         ],
         default="CAMERA",
     )
