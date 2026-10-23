@@ -12,8 +12,8 @@ tags = ["3D View", "Render", "Animation"]
 blender_version_min = "4.2.0"
 license = ["SPDX:MIT"]
 
-# Wheels are fetched by tools/build_extension.py (not committed). Building with
-# --split-platforms produces one zip per platform, each carrying only its wheel.
+# Wheels are fetched by tools/build_extension.py (not committed). The build makes one
+# zip carrying all four wheels; Blender installs only the one matching the platform.
 platforms = ["windows-x64", "macos-arm64", "macos-x64", "linux-x64"]
 wheels = [
   "./wheels/reactor_sdk-1.11.0-py3-none-win_amd64.whl",
