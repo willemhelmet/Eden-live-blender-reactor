@@ -3,7 +3,7 @@
     blender -b --factory-startup --python tests/test_headless.py
 
 Covers: add-on registration, the settings surface, API URL handling, pixel helpers, frame alignment, the demo scene,
-render-engine frame capture, a mock EdenLive session, and the full
+render-engine frame capture, a mock EdenLive session, the one-click Go Live sequence, and the full
 record -> align -> MP4 pipeline with both encoders. Exits non-zero on failure.
 """
 
@@ -177,6 +177,45 @@ def test_mock_session():
     session.disconnect().result(timeout=5)
     assert session.status == "disconnected"
     session.shutdown()
+
+
+@check("go live: one click captures a reference, connects and starts the world (mock)")
+def test_go_live():
+    from eden_live_previs import live
+    from eden_live_previs.session import get_session, reset_session
+
+    old = os.environ.get("EDEN_LIVE_MOCK")
+    os.environ["EDEN_LIVE_MOCK"] = "1"
+    try:
+        scene = bpy.context.scene
+        assert scene.camera is not None
+        scene.eden_live.reference_path = ""
+        assert bpy.ops.eden_live.go_live() == {"FINISHED"}
+        seq = live.state.go_live
+        assert seq is not None and not bpy.ops.eden_live.go_live.poll()
+        ref = bpy.path.abspath(scene.eden_live.reference_path)
+        assert os.path.isfile(ref), "Go Live did not capture a reference"
+        deadline = time.perf_counter() + 30
+        while not seq.done:
+            assert time.perf_counter() < deadline, f"go-live stuck at: {seq.message}"
+            time.sleep(seq.step() or 0.02)
+        session = get_session()
+        assert not seq.error, seq.error
+        assert session.ready and session.backend_label == backends.MockBackend.label
+        _wait(lambda: session.state.get("started"), 10, "world start")
+        # No live timer in background mode, so feed the draft the UI would stream.
+        session.push_source_frame(capture.load_image_bgra(ref))
+        _wait(lambda: session.main.seq > 5, 10, "output frames")
+        assert live.state.go_live is None and bpy.ops.eden_live.go_live.poll()
+        assert bpy.ops.eden_live.disconnect() == {"FINISHED"}
+        _wait(lambda: session.status == "disconnected", 10, "disconnect")
+        assert not session.last_error, session.last_error
+    finally:
+        if old is None:
+            os.environ.pop("EDEN_LIVE_MOCK", None)
+        else:
+            os.environ["EDEN_LIVE_MOCK"] = old
+        reset_session()
 
 
 def _run_recording(name, encoder, echo_tags, n_frames, keep_frames=True):
@@ -361,7 +400,7 @@ def test_failed_encode_keeps_frames():
 
 def main():
     for test in (test_register, test_imaging, test_align, test_api_url, test_settings_surface, test_demo_capture,
-                 test_mock_session, test_record_background, test_record_inprocess, test_background_fallback,
+                 test_mock_session, test_go_live, test_record_background, test_record_inprocess, test_background_fallback,
                  test_failed_encode_keeps_frames):
         test()
     try:

@@ -162,8 +162,9 @@ a bill.
 ## EdenLive protocol
 
 Per the [schema](https://docs.reactor.inc/model-api-reference/eden-live/schema): connect,
-publish `source_video`, `set_source({source: "client"})`; on Start, `set_paused(true)` if a
-world is playing, `upload_file` the reference, `set_image`, `set_prompt`, `start({seed})`;
+publish `source_video`, `set_source({source: "client"})`; on Go Live or Restart World,
+`set_paused(true)` if a world is playing, `upload_file` the reference, `set_image`, `set_prompt`,
+`start({seed})`;
 `set_prompt` for live edits; `set_paused` for pause and resume; `state_update` snapshots drive
 the panel; the session is disconnected on Stop or quit.
 
@@ -179,7 +180,7 @@ the panel; the session is disconnected on Stop or quit.
 | `live.py` | Main-thread timer: capture scheduling, prompt debounce, preview image, redraws. |
 | `recorder.py`, `align.py`, `encode.py` | Record pipeline, frame alignment, MP4 encoding. |
 | `imaging.py` | Resize/cover helpers at EdenLive's 1280×704. |
-| `operators.py`, `ui.py`, `props.py`, `prefs.py` | Blender UI. |
+| `operators.py`, `ui.py`, `props.py`, `prefs.py` | Blender UI. `GoLiveSequence` in `operators.py` is the one-click flow (capture reference if none, connect, start, open preview), stepped by a timer in the UI and by hand in the headless test. |
 | `deps.py` | Finds the SDK; the legacy pip fallback. |
 | `demo.py` | The primitive demo scene. |
 

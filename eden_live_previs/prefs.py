@@ -37,9 +37,18 @@ class EDENLIVE_AP_preferences(bpy.types.AddonPreferences):
         layout = self.layout
         col = layout.column()
         col.prop(self, "api_key")
-        if not self.api_key and os.environ.get("REACTOR_API_KEY"):
+        if self.api_key:
+            col.label(text="Key saved. Open the 3D Viewport sidebar (N) > EdenLive and press Go Live.", icon="CHECKMARK")
+        elif os.environ.get("REACTOR_API_KEY"):
             col.label(text="Using REACTOR_API_KEY from the environment", icon="INFO")
-        col.operator("wm.url_open", text="Get an API key", icon="URL").url = "https://reactor.inc/dashboard"
+        else:
+            col.label(text="Get a key: sign in at reactor.inc, click your user icon, then API Keys. It starts with rk_.",
+                      icon="INFO")
+        row = col.row()
+        row.operator("wm.url_open", text="Get an API Key", icon="URL").url = "https://reactor.inc/dashboard"
+        row.operator("wm.url_open", text="Help", icon="HELP").url = (
+            "https://github.com/willemhelmet/Eden-live-blender-reactor#readme"
+        )
         if use_mock():
             col.label(text="EDEN_LIVE_MOCK is set: using the offline mock backend", icon="INFO")
 
